@@ -1,0 +1,12 @@
+*.csv
+*.xlsx
+!1_Account Master Data Analytics_Report.xlsx
+!2_Prospecting_Standard Template.xlsx
+__pycache__/
+*.pyc
+.claude/
+pipeline_refactor/
+pipeline_refactor.zip
+generate_changelog_doc.py
+*.docx
+docs/
