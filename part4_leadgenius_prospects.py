@@ -1,118 +1,102 @@
 # part4_leadgenius_prospects.py
 # Part 4 - LeadGenius Prospects
 # Input : Name_Tag_LG.xlsx  +  Name_Tag_Accounts.csv
-# Output: Name_Tag_LG Prospects.xlsx, Name_Tag_Deliverable.xlsx,
-#         Name_Tag_Emails.csv, Name_Tag_Accounts with Insufficient Prospects.csv
+#         (optionally) Name_Tag_Outreach Prospects.xlsx, Name_Tag_ZI Prospects.xlsx
+# Output: Name_Tag_LG Prospects.xlsx
+#         Name_Tag_Deliverable.xlsx
+#         Name_Tag_Emails.csv
+#         Name_Tag_Accounts with Insufficient Prospects.csv
+#
+# File naming convention: "Requestor Name_Outreach Tag_LG.xlsx"
 
-import sys
+#v2026-04
+
 import numpy as np
 import pandas as pd
-from utils import (
-    detect_gender, convert_country_to_code, fuzzy_match_company, format_phone,
-)
+import sys
+
+from utils import run_prospect_pipeline
 
 np.set_printoptions(threshold=sys.maxsize)
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
 
-# ─── Inputs ───────────────────────────────────────────────────────────────────
+CONFIG = {
+    "source_label": "LeadGenius",
+    "prospect_id_prefix": "L",
+    "reader": "xlsx",
+    "sheet": "Sheet1",
+    "filter_verified": True,
+    "rename_cols": {
+        "Website URL": "Website",
+        "Company Name": "Company",
+        "otherPhones": "Mobile Phone",
+        "Company Phone": "Work Phone",
+        "LinkedIn URL": "Company LinkedIn",
+        "Job Title": "Title",
+        "LinkedIn Profile URL": "LinkedIn URL",
+        "Contact City": "City",
+        "Contact State": "State",
+        "Contact Country": "Country",
+        "Contact Zip code": "Zip",
+        "gender": "Gender",
+        "Prospect Persona": "Persona name",
+        "Prospect Stage": "Stage",
+        "WBS Code": "WBS Code (Custom 20)",
+        "LG_Outcome_Status": "LG_Outcome_Status (Custom 30)",
+        "source": "Source",
+    },
+    "desired_columns": [
+        "Company Status", "Contact Status", "Custom Id", "Account Name",
+        "Account Country", "Company", "Tags", "Website", "First Name", "Last Name",
+        "Title", "Gender", "Email", "LinkedIn URL", "City", "State", "Country", "Zip",
+        "Work Phone", "Mobile Phone", "Company LinkedIn", "Persona name", "Stage",
+        "WBS Code (Custom 20)", "LG_Outcome_Status (Custom 30)", "Source",
+    ],
+    "columns_to_delete": [
+        "Street", "City", "State", "Country", "Zip", "industry",
+        "Employee Range", "Revenue Range", "tags", "Prospect.tags",
+        "Last Updated", "Created Date", "Account CRM ID", "Contact CRM ID",
+        "LG Account ID", "LG Contact ID",
+    ],
+    "merge_strategy": "company_name",
+    "filter_same_country": False,
+    "convert_country": True,
+    "convert_account_country": True,
+    "format_phones": True,
+    "validation": {
+        "include_bad_gender": True,
+        "include_bad_country": True,
+    },
+    "optional_inputs": [
+        "_Outreach Prospects.xlsx",
+        "_ZI Prospects.xlsx",
+    ],
+    "issue_cols": [
+        "Issue", "# Prospects/Account Range", "Custom Id", "Account Name",
+        "First Name", "Last Name", "Title", "Gender", "Plausible Gender",
+        "Email", "Domain Score", "LinkedIn URL", "Company LinkedIn",
+        "Work Phone", "Mobile Phone", "City", "State", "Zip", "Country",
+        "Tags", "Prospect ID", "Source",
+    ],
+    "prospects_output": "_LG Prospects.xlsx",
+    "drop_from_prospects_export": [
+        "Company Status", "Contact Status", "Issue", "# Prospects/Account Range",
+        "Plausible Gender", "Domain Score",
+    ],
+    "deliverable_extra_cols": ["Company LinkedIn"],
+    "source_from_zi": False,
+}
+
+# ─── Interactive inputs ───────────────────────────────────────────────────────
+
 file_name = input("Please enter the Excel file name (including .xlsx extension): ")
 base_name = file_name.replace("_LG.xlsx", "")
+
 threshold = int(input("Enter the number of prospects per account requested: "))
 hide_email_choice = int(input("Do you want to hide Email column in Deliverable.xlsx? (1 = Hide, 2 = Keep): "))
 hide_email = (hide_email_choice == 1)
 
-# ─── Load & filter ────────────────────────────────────────────────────────────
-df = pd.read_excel(file_name, sheet_name="Sheet1")
-df = df[df["Contact Status"] == "Verified"]
-df = df.rename(columns={
-    "Website URL": "Website",
-    "Company Name": "Company",
-    "otherPhones": "Mobile Phone",
-    "Company Phone": "Work Phone",
-    "LinkedIn URL": "Company LinkedIn",
-    "Job Title": "Title",
-    "LinkedIn Profile URL": "LinkedIn URL",
-    "Contact City": "City",
-    "Contact State": "State",
-    "Contact Country": "Country",
-    "Contact Zip code": "Zip",
-    "gender": "Gender",
-    "source": "Source",
-})
-drop_cols = [
-    "Street", "industry", "Employee Range", "Revenue Range",
-    "Last Updated", "Created Date", "Account CRM ID", "Contact CRM ID",
-    "LG Account ID", "LG Contact ID",
-]
-df = df.drop(columns=[c for c in drop_cols if c in df.columns])
+# ─── Run pipeline ─────────────────────────────────────────────────────────────
 
-# ─── Merge accounts ───────────────────────────────────────────────────────────
-accounts = pd.read_csv(base_name + "_Accounts.csv", sep=",", encoding="utf-8-sig")
-accounts = accounts.rename(columns={"Country": "Account Country"})
-
-if "Company" in df.columns:
-    df["Custom Id"] = df["Company"].apply(lambda n: fuzzy_match_company(n, accounts))
-    _extra = ["Tags"] if "Tags" in accounts.columns else []
-    df = df.merge(accounts[["Custom Id", "Account Name", "Account Country"] + _extra],
-                  on="Custom Id", how="left")
-else:
-    df = df.rename(columns={"Country": "Account Country"})
-
-# ─── Country & phone formatting ───────────────────────────────────────────────
-df["Country"] = df["Country"].apply(convert_country_to_code)
-df["Account Country"] = df["Account Country"].apply(convert_country_to_code)
-df["Work Phone"] = df.apply(lambda r: format_phone(r.get("Work Phone"), r.get("Account Country", "DE")), axis=1)
-df["Mobile Phone"] = df.apply(lambda r: format_phone(r.get("Mobile Phone"), r.get("Account Country", "DE")), axis=1)
-
-# ─── IDs, source, validation ──────────────────────────────────────────────────
-df.insert(0, "Prospect ID", ["L" + str(i + 1).zfill(4) for i in range(len(df))])
-if "Source" not in df.columns:
-    df["Source"] = "LeadGenius"
-df["Issue"] = ""
-df["Plausible Gender"] = df["First Name"].apply(detect_gender)
-df["Domain Score"] = ""
-
-df["Gender"] = (df["Gender"].astype(str).str.strip().str.lower()
-                .map({"male": "Male", "female": "Female"}).fillna("Unknown"))
-bad_gender = (df["Gender"] != df["Plausible Gender"]) & (df["Plausible Gender"] != "Unknown")
-df.loc[bad_gender, "Issue"] += "+Bad Gender"
-df.loc[df["Country"] != df["Account Country"], "Issue"] += "+Bad Country"
-df["Issue"] = df["Issue"].str.strip("+")
-
-counts = df.groupby("Custom Id").size()
-df["# Prospects/Account Range"] = df["Custom Id"].map(counts)
-
-# ─── Issues export ────────────────────────────────────────────────────────────
-issue_cols = [
-    "Issue", "# Prospects/Account Range", "Custom Id", "Account Name",
-    "First Name", "Last Name", "Title", "Gender", "Plausible Gender",
-    "Email", "Domain Score", "LinkedIn URL", "Company LinkedIn",
-    "Work Phone", "Mobile Phone", "City", "State", "Zip", "Country",
-    "Tags", "Prospect ID", "Source",
-]
-issues_file = base_name + "_Prospect Issues.xlsx"
-with pd.ExcelWriter(issues_file, engine="xlsxwriter") as writer:
-    df[[c for c in issue_cols if c in df.columns]].to_excel(writer, sheet_name="Issues", index=False)
-print(f"Please review: {issues_file}")
-input("Press Enter when done reviewing issues...")
-
-df_rev = pd.read_excel(issues_file, sheet_name="Issues")
-df_rev = df_rev[df_rev["Issue"].isna() | (df_rev["Issue"].astype(str).str.strip() == "")]
-
-prospects_export = df.drop(columns=[
-    "Company Status", "Contact Status", "Issue", "# Prospects/Account Range",
-    "Plausible Gender", "Domain Score",
-], errors="ignore")
-with pd.ExcelWriter(base_name + "_LG Prospects.xlsx", engine="xlsxwriter") as writer:
-    prospects_export.to_excel(writer, sheet_name="Prospects", index=False)
-
-deliverable_cols = [
-    "Prospect ID", "Custom Id", "Account Name", "Tags", "First Name",
-    "Last Name", "Title", "Gender", "Email", "Company LinkedIn",
-    "LinkedIn URL", "Work Phone", "Mobile Phone", "Country", "Source",
-]
-deliverable = df_rev[[c for c in deliverable_cols if c in df_rev.columns]].copy()
-deliverable.to_excel(base_name + "_Deliverable.xlsx", index=False)
-deliverable[["Email", "First Name", "Last Name"]].to_csv(base_name + "_Emails.csv", index=False)
-print("Done.")
+run_prospect_pipeline(CONFIG, base_name, threshold, hide_email)
