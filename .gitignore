@@ -8,5 +8,4 @@ __pycache__/
 pipeline_refactor/
 pipeline_refactor.zip
 generate_changelog_doc.py
-*.docx
 docs/
