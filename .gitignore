@@ -1,5 +1,7 @@
 *.csv
 *.xlsx
+*.zip
+*.md
 !1_Account Master Data Analytics_Report.xlsx
 !2_Prospecting_Standard Template.xlsx
 __pycache__/
