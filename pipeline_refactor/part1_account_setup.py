@@ -21,28 +21,62 @@ pd.set_option("display.max_rows", None)
 file_name = input("Please enter the Excel file name (including .xlsx extension): ")
 base_name = file_name.replace(".xlsx", "")
 
+_raw = pd.read_excel(file_name, sheet_name="Template", header=None, nrows=10)
+_header_row = _raw.index[
+    _raw.apply(
+        lambda row: row.astype(str).str.strip().eq("Account ID").any()
+                  & row.astype(str).str.strip().eq("Account Name").any(),
+        axis=1
+    )
+]
+if _header_row.empty:
+    raise ValueError("Could not find header row (with 'Account ID' and 'Account Name') in the accounts file.")
+header_idx = int(_header_row[0])
+del _raw
 accounts = pd.read_excel(
     file_name,
     sheet_name="Template",
-    skiprows=4
+    skiprows=header_idx
 ).rename(columns={
     "Website URL (if Account ID is not available)": "Website URL"
 })
+# Drop rows where Account ID is not numeric (instruction / blank / note rows)
+accounts["_id_num"] = pd.to_numeric(accounts["Account ID"], errors="coerce")
+accounts = accounts.dropna(subset=["_id_num"]).drop(columns="_id_num").reset_index(drop=True)
 
 print(len(accounts), " - # Rows in Accounts Data")
 
 # ─── Load CRM ─────────────────────────────────────────────────────────────────
 
+_crm_raw = pd.read_excel(
+    "1_Account Master Data Analytics_Report.xlsx",
+    sheet_name="EMDA Account Master Data",
+    header=None,
+    nrows=10
+)
+_crm_header_row = _crm_raw.index[
+    _crm_raw.apply(
+        lambda row: row.astype(str).str.strip().eq("Business Partner ID").any()
+                  & row.astype(str).str.strip().eq("Organization Name1").any(),
+        axis=1
+    )
+]
+if _crm_header_row.empty:
+    raise ValueError("Could not find header row in the CRM file.")
+_crm_header_idx = int(_crm_header_row[0])
 crm_data = pd.read_excel(
     "1_Account Master Data Analytics_Report.xlsx",
     sheet_name="EMDA Account Master Data",
-    skiprows=5
+    skiprows=_crm_header_idx
 ).rename(columns={
     "Business Partner ID": "Account ID",
     "Organization Name1": "Account Name Name",
     "Account Web Address": "Website URL",
     "GEO Level 3 Country Descr": "Country"
 })
+# Drop rows where Account ID is not numeric (instruction / blank rows)
+crm_data["_crm_id_num"] = pd.to_numeric(crm_data["Account ID"], errors="coerce")
+crm_data = crm_data.dropna(subset=["_crm_id_num"]).drop(columns="_crm_id_num").reset_index(drop=True)
 
 # ─── Fix Data Types ───────────────────────────────────────────────────────────
 
@@ -59,21 +93,21 @@ if valid_id_mask.any():
         accounts.duplicated(subset="Account ID", keep=False) & valid_id_mask
     ]
     if not duplicates_id.empty:
-        print("\n⚠️ Duplicate records found based on valid Account ID:\n")
+        print("\n[WARNING] Duplicate records found based on valid Account ID:\n")
         print(duplicates_id.to_string())
     else:
-        print("\n✅ No duplicates found based on valid Account ID.")
+        print("\n[OK] No duplicates found based on valid Account ID.")
 else:
-    print("\nℹ️ No valid Account IDs found, skipping Account ID duplicate check.")
+    print("\n[INFO] No valid Account IDs found, skipping Account ID duplicate check.")
 
 name_mask = accounts["Account Name"].notna() & (accounts["Account Name"].str.strip() != "")
 duplicates_name = accounts[name_mask & accounts.duplicated(subset="Account Name", keep=False)]
 
 if not duplicates_name.empty:
-    print("\n⚠️ Duplicate records found based on Account Name:\n")
+    print("\n[WARNING] Duplicate records found based on Account Name:\n")
     print(duplicates_name.to_string())
 else:
-    print("\n✅ No duplicates found based on Account Name.")
+    print("\n[OK] No duplicates found based on Account Name.")
 
 blanks_name = accounts[~name_mask]
 if not blanks_name.empty:
@@ -86,14 +120,15 @@ dummy_accounts = accounts[
     accounts["Account Name"].astype(str).str.lower().str.contains("dummy")
 ]
 if not dummy_accounts.empty:
-    print(f"\n🚩 Found {len(dummy_accounts)} accounts containing the word 'dummy':\n")
+    print(f"\n[FLAG] Found {len(dummy_accounts)} accounts containing the word 'dummy':\n")
     print(dummy_accounts.to_string())
 else:
-    print("\n✅ No accounts found with the word 'dummy'.")
+    print("\n[OK] No accounts found with the word 'dummy'.")
 
 # ─── Enrich from CRM ──────────────────────────────────────────────────────────
 
 crm_data["Account ID"] = pd.to_numeric(crm_data["Account ID"], errors="coerce")
+crm_data = crm_data.drop_duplicates(subset="Account ID", keep="first")
 crm_lookup = crm_data.set_index("Account ID")
 
 for idx in accounts[valid_id_mask].index:
@@ -106,10 +141,12 @@ for idx in accounts[valid_id_mask].index:
 
 # ─── Clean Website URLs ───────────────────────────────────────────────────────
 
+_valid_url = accounts["Website URL"].str.strip()
 valid_website_mask = (
-    accounts["Website URL"].notna() &
-    (accounts["Website URL"].astype(str).str.strip() != "") &
-    (accounts["Website URL"].astype(str).str.strip() != "#")
+    (accounts["Website URL"] != "") &
+    (_valid_url != "#") &
+    (_valid_url.str.lower() != "nan") &
+    (_valid_url != "None")
 )
 
 accounts.loc[valid_website_mask, "Website URL"] = (
@@ -151,12 +188,7 @@ if "Tags" in accounts.columns:
 
 accounts.reset_index(drop=True, inplace=True)
 
-if valid_id_mask.any():
-    unique_accounts = accounts.loc[valid_id_mask, "Custom Id"].nunique()
-    print(f"\nNumber of Accounts: {unique_accounts}")
-else:
-    unique_accounts = accounts["Account Name"].dropna().nunique()
-    print(f"\nNumber of Accounts: {unique_accounts}")
+print(f"\nNumber of Accounts: {len(accounts)}")
 
 print(accounts["Country"].value_counts(dropna=False))
 
