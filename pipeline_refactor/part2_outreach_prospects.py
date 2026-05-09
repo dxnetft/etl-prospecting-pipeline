@@ -76,7 +76,10 @@ file_name = input("Please enter the Excel file name (including .csv extension): 
 base_name = file_name.replace("_Outreach.csv", "")
 
 # Pre-process: drop rows without email or account assignment, overwrite CSV in place
-_df = pd.read_csv(file_name, sep=",", encoding="utf-8-sig")
+with open(file_name, encoding="utf-8-sig") as _f:
+    _first = _f.readline()
+_sep = ";" if _first.count(";") > _first.count(",") else ","
+_df = pd.read_csv(file_name, sep=_sep, encoding="utf-8-sig")
 _df = _df.dropna(subset=["Email"])
 _df = _df.dropna(subset=["Custom Field 32"])
 print(len(_df), " - # Rows after excluding records without emails and account assignments")
