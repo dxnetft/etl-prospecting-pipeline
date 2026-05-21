@@ -12,3 +12,6 @@ docs/
 pipeline_refactor.zip
 generate_changelog_doc.py
 1_Account Master Data Analytics_Report.xlsx
+
+# LibreOffice lock files
+.~lock.*#
