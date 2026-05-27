@@ -8,6 +8,7 @@ __pycache__/
 .claude/
 pipeline_refactor/
 docs/
+old_files/
 
 pipeline_refactor.zip
 generate_changelog_doc.py
