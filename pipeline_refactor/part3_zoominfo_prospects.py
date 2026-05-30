@@ -65,7 +65,6 @@ CONFIG = {
     },
     "optional_inputs": [
         "_Outreach Prospects.xlsx",
-        "_LG Prospects.xlsx",
     ],
     "issue_cols": [
         "Issue", "# Prospects/Account Range", "Custom Id", "Account Name",
