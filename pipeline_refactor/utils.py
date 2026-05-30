@@ -568,7 +568,7 @@ def write_deliverable_xlsx(
 
 def is_valid_id(x):
     try:
-        return int(x) >= 10000
+        return int(x) > 0
     except:
         return False
 
@@ -586,6 +586,11 @@ def unique_account_count(df):
     if "Custom Id" in df.columns and (df["Custom Id"] > 0).any():
         return df.loc[df["Custom Id"] > 0, "Custom Id"].nunique()
     return df["Account Name"].nunique()
+
+
+def total_account_count(df):
+    df = clean_id_and_name(df)
+    return len(df)
 
 
 def compute_stats(accounts_df, deliverable_df, threshold):
@@ -643,14 +648,15 @@ def compute_stats(accounts_df, deliverable_df, threshold):
         (accounts_with_prospects / accounts_submitted) * 100
     ) if accounts_submitted else 0
 
-    print(f"# Accounts Submitted: {accounts_submitted}")
+    accounts_total = total_account_count(accounts_df)
+    print(f"# Accounts Submitted: {accounts_total}")
     print(f"\n# Prospects Found (deliverable only): {prospects_found}")
     print(f"# Prospects with Emails: {prospects_with_emails}")
     print(f"# Prospects with LinkedIn URLs: {prospects_with_linkedin}")
     print(f"# Accounts with Prospects: {accounts_with_prospects}")
     print(f"\nEnrichment Rate: {enrichment_rate}%")
-    print(f"\n# Accounts without Prospects: {unique_account_count(accounts_wo)}")
-    print(f"# Accounts with Fewer than {threshold} Prospects: {unique_account_count(accounts_few)}")
+    print(f"\n# Accounts without Prospects: {total_account_count(accounts_wo)}")
+    print(f"# Accounts with Fewer than {threshold} Prospects: {total_account_count(accounts_few)}")
     print(f"Total Accounts needing more prospects: {unique_account_count(accounts_insufficient)}")
 
     return accounts_wo, accounts_few, accounts_insufficient
@@ -737,7 +743,7 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
             df = pd.merge(df, _acct_dedup[["Account Name", "Custom Id", "Account Country"] + _extra],
                           on="Account Name", how="left")
         else:
-            print(f"⚠️  Could not merge accounts: no 'Custom Id', 'Website URL', or 'Query Name' in file.")
+            print(f"[WARNING] Could not merge accounts: no 'Custom Id', 'Website URL', or 'Query Name' in file.")
             print(f"    Columns: {list(df.columns)}")
             raise SystemExit(1)
     elif strategy == "company_name":
@@ -828,7 +834,12 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
     def _load_optional(filepath):
         if os.path.exists(filepath):
             d = pd.read_excel(filepath)
-            return d[[c for c in cols if c in d.columns]]
+            d = d[[c for c in cols if c in d.columns]]
+            # Add missing columns (e.g. Tags) so concat doesn't create NaN gaps
+            for c in cols:
+                if c not in d.columns:
+                    d[c] = ""
+            return d
         print(f"File not found: {filepath}")
         return pd.DataFrame(columns=cols)
 
@@ -882,18 +893,18 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
     print(f"\nFile saved as {issues_file}")
 
     # ── Manual fix pause ──
-    input("\n⚠️  PLEASE FIX THE PROSPECTS ISSUES FILE BEFORE PROCEEDING.\nPress Enter when done...")
+    input("\n[WARNING] PLEASE FIX THE PROSPECTS ISSUES FILE BEFORE PROCEEDING.\nPress Enter when done...")
 
     # ── Re-import fixed prospects ──
     edited = pd.read_excel(issues_file, sheet_name="Issues")
     edited["Prospect ID"] = edited["Prospect ID"].astype(str)
 
-    df = edited[edited["Prospect ID"].str.startswith(prefix)].copy().reset_index(drop=True)
+    df = edited.copy().reset_index(drop=True)
     prospects = edited.copy().reset_index(drop=True)
 
     # ── Re-enrich from original sample ──
     df_sample = df_sample.sort_values(by=["Account Name", "First Name", "Last Name"]).reset_index(drop=True)
-    df_sample["Prospect ID"] = (df_sample.index + 1).map(lambda x: f"{prefix}{x:04d}")
+    # df_sample["Prospect ID"] = (df_sample.index + 1).map(lambda x: f"{prefix}{x:04d}")
 
     protected_cols = [
         "Issue", "# Prospects/Account Range", "Custom Id", "Account Name",
@@ -917,16 +928,19 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
 
     # ── Deliverable ──
     if "Tags" in prospects.columns:
-        deliverable = prospects[
+        _has_tags = (
             prospects["Tags"].notna() &
             (prospects["Tags"].astype(str).str.strip() != "") &
             (prospects["Tags"].astype(str).str.lower() != "nan")
-        ].copy().reset_index(drop=True)
+        )
+        # Include rows from optional inputs (no Tags yet) alongside rows with valid Tags
+        _tag_mask = _has_tags
+        deliverable = prospects[_tag_mask].copy().reset_index(drop=True)
     else:
         deliverable = prospects.copy().reset_index(drop=True)
     deliverable = clean_id_and_name(deliverable)
 
-    accounts_wo, accounts_few, accounts_insufficient = compute_stats(accounts, deliverable, threshold)
+    accounts_wo, accounts_few, accounts_insufficient = compute_stats(accounts, prospects, threshold)
 
     # Part 3: merge Source from df onto deliverable
     if config.get("source_from_zi") and "Source" in df.columns:
