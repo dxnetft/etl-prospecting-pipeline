@@ -8,6 +8,43 @@ import pycountry
 import gender_guesser.detector as gender
 from fuzzywuzzy import fuzz
 
+# ─── Timer ────────────────────────────────────────────────────────────────────
+
+class Timer:
+    """Lightweight per-stage timer using perf_counter."""
+
+    def __init__(self):
+        import time as _t
+        self._time = _t
+        self._t0 = _t.perf_counter()
+        self._checkpoints = []
+
+    def checkpoint(self, label: str):
+        now = self._time.perf_counter()
+        elapsed = now - self._t0
+        self._checkpoints.append((label, elapsed))
+        self._t0 = now
+        return elapsed
+
+    def summary(self, records: int = 0) -> str:
+        lines = ["\n╔══════════════════════════════════════════════════════════╗",
+                 "║  PERFORMANCE PROFILE                                     ║",
+                 "╠══════════════════════════════════════════════════════════╣"]
+        total = 0.0
+        for i, (label, elapsed) in enumerate(self._checkpoints):
+            total += elapsed
+            bar = "█" * max(1, int(elapsed * 40 / max(
+                self._checkpoints, key=lambda x: x[1]
+            )[1]))
+            lines.append(f"║  {label:<40s} {elapsed:>7.3f}s {bar}")
+        lines.append("╠══════════════════════════════════════════════════════════╣")
+        lines.append(f"║  {'TOTAL':<40s} {total:>7.3f}s")
+        if records and total > 0:
+            lines.append(f"║  {'THROUGHPUT':<40s} {records/total:>7.0f} rec/s")
+        lines.append("╚══════════════════════════════════════════════════════════╝")
+        return "\n".join(lines)
+
+
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 PRIVATE_DOMAINS = {
@@ -681,6 +718,9 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
     prefix = config["prospect_id_prefix"]
     source_label = config["source_label"]
 
+    # ── Performance instrumentation ──
+    _timer = Timer()
+
     # ── Load main input ──
     if config["reader"] == "csv":
         ext = "_ZI.csv" if prefix == "Z" else "_Outreach.csv"
@@ -694,13 +734,19 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
         base_name + "_Accounts.csv", sep=",", encoding="utf-8-sig"
     ).rename(columns={"Country": "Account Country", "Website": "Website URL"})
 
+    _timer.checkpoint("Load (prospects + accounts)")
+
     print(len(accounts), " - # Rows in Accounts Data\n")
     print(len(df), " - # Rows in Prospects Data")
 
     # ── Filter verified (Part 4 only) ──
     if config.get("filter_verified") and "Contact Status" in df.columns:
+        _before = len(df)
         df = df[df["Contact Status"] == "Verified"]
+        print(f"  Verified filter: {_before} -> {len(df)} rows ({_before - len(df)} dropped)")
         print(len(df), " - # Rows after retaining Verified Prospects")
+
+    _timer.checkpoint("Filter + dtypes")
 
     # ── Fix data types ──
     for _col in ["ZoomInfo Contact ID", "Person Zip Code", "ZoomInfo Company ID",
@@ -749,10 +795,15 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
     elif strategy == "company_name":
         if "Company" in df.columns:
             _company_extra = ["Tags"] if "Tags" in accounts.columns else []
-            df = pd.merge(df, accounts[["Custom Id", "Account Name", "Account Country"] + _company_extra],
-                          on="Custom Id", how="left")
+            df = pd.merge(
+                df,
+                accounts[["Custom Id", "Account Name", "Account Country"] + _company_extra],
+                left_on="Company", right_on="Account Name", how="left"
+            )
         else:
             df = df.rename(columns={"Country": "Account Country"})
+
+    _timer.checkpoint("Merge accounts")
 
     # ── Drop unwanted columns ──
     columns_to_delete = config.get("columns_to_delete", [])
@@ -772,7 +823,9 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
 
     # ── Filter same country (Part 3 only) ──
     if config.get("filter_same_country") and "Account Country" in df.columns and "Country" in df.columns:
+        _before = len(df)
         df = df[df["Account Country"] == df["Country"]]
+        print(f"  Same-country filter: {_before} -> {len(df)} rows ({_before - len(df)} dropped)")
 
     # ── Country code conversion ──
     if config.get("convert_country") and "Country" in df.columns:
@@ -816,6 +869,8 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
             acct_map = accounts.drop_duplicates(subset="Account Name", keep="first").set_index("Account Name")["Custom Id"]
             df["Custom Id"] = df["Account Name"].map(acct_map).fillna(0).astype(int)
 
+    _timer.checkpoint("Country conversion + phone format")
+
     # ── Set Source ──
     if "Source" in df.columns:
         df["Source"] = df["Source"].apply(
@@ -831,11 +886,18 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
         "City", "State", "Zip", "Country", "Account Country", "Source", "Prospect ID",
     ]
 
-    def _load_optional(filepath):
+    _optional_prefixes = {
+        "_Outreach Prospects.xlsx": "O",
+        "_ZI Prospects.xlsx": "Z",
+        "_LG Prospects.xlsx": "L",
+    }
+
+    def _load_optional(filepath, file_prefix):
         if os.path.exists(filepath):
             d = pd.read_excel(filepath)
+            if "Prospect ID" in d.columns and file_prefix:
+                d = d[d["Prospect ID"].astype(str).str.startswith(file_prefix)]
             d = d[[c for c in cols if c in d.columns]]
-            # Add missing columns (e.g. Tags) so concat doesn't create NaN gaps
             for c in cols:
                 if c not in d.columns:
                     d[c] = ""
@@ -843,7 +905,10 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
         print(f"File not found: {filepath}")
         return pd.DataFrame(columns=cols)
 
-    optional_dfs = [_load_optional(base_name + p) for p in config.get("optional_inputs", [])]
+    optional_dfs = [
+        _load_optional(base_name + p, _optional_prefixes.get(p, ""))
+        for p in config.get("optional_inputs", [])
+    ]
     main_df = df[[c for c in cols if c in df.columns]].copy()
 
     # Part 4: clear Mobile Phone (populated later from enrichment)
@@ -853,6 +918,8 @@ def run_prospect_pipeline(config, base_name, threshold, hide_email):
     dataframes = [d for d in optional_dfs + [main_df] if not d.empty and not d.isna().all().all()]
     prospects = pd.concat(dataframes, ignore_index=True)
     prospects["Issue"] = ""
+
+    _timer.checkpoint("Concat sources + set source")
 
     # ── Validation ──
     mask = prospects["Prospect ID"].astype(str).str.startswith(prefix)

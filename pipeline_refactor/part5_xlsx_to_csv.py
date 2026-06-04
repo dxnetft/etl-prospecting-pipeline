@@ -18,10 +18,40 @@ import pandas as pd
 import pycountry
 import sys
 import os
+import time as _time
 
 np.set_printoptions(threshold=sys.maxsize)
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
+
+# ─── Timer ────────────────────────────────────────────────────────────────────
+
+class _Timer:
+    def __init__(self):
+        self._t0 = _time.perf_counter()
+        self._cps = []
+    def cp(self, label):
+        now = _time.perf_counter()
+        elapsed = now - self._t0
+        self._cps.append((label, elapsed))
+        self._t0 = now
+        return elapsed
+    def summary(self, records=0):
+        print("\n+----------------------------------------------------------+")
+        print("|  PERFORMANCE PROFILE                                     |")
+        print("+----------------------------------------------------------+")
+        total = 0.0
+        for label, elapsed in self._cps:
+            total += elapsed
+            bar = "#" * max(1, int(elapsed * 40 / max(self._cps, key=lambda x: x[1])[1]))
+            print(f"|  {label:<40s} {elapsed:>7.3f}s {bar}")
+        print("+----------------------------------------------------------+")
+        print(f"|  {'TOTAL':<40s} {total:>7.3f}s")
+        if records and total > 0:
+            print(f"|  {'THROUGHPUT':<40s} {records/total:>7.0f} rec/s")
+        print("+----------------------------------------------------------+")
+
+_timer = _Timer()
 
 # ─── Load Deliverable ─────────────────────────────────────────────────────────
 
@@ -31,6 +61,7 @@ base_name = file_name.replace("_Deliverable.xlsx", "")
 prospects = pd.read_excel(file_name, sheet_name="Prospects")
 print(len(prospects), " - # Rows in Prospects Data\n")
 print(prospects["Tags"].value_counts().sort_index(), "\n")
+_timer.cp("Load Deliverable.xlsx")
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
 
@@ -80,6 +111,7 @@ def process_file(file_name, remove_source=False, output_name=None):
 
     df.to_csv(output_name, index=False, sep=",", encoding="utf-8-sig")
     print(f"File saved as {output_name}")
+    _timer.cp(f"Export {output_name.split(chr(92))[-1].split('/')[-1]}")
 
 
 # ─── Export CSVs ──────────────────────────────────────────────────────────────
@@ -226,6 +258,10 @@ else:
             upload_output = base_name + "_Prospect Upload.csv"
             upload_df.to_csv(upload_output, sep=",", encoding="utf-8-sig", index=False)
             print(f"File saved as {upload_output}")
+            _timer.cp("Export Prospect Upload.csv")
 
     except Exception as e:
         print(f"Could not process Prospect Upload sheet: {e}")
+
+# ── Performance summary ──
+_timer.summary(records=len(prospects))

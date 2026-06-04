@@ -11,10 +11,40 @@ import numpy as np
 import pandas as pd
 import pycountry
 import sys
+import time as _time
 
 np.set_printoptions(threshold=sys.maxsize)
 pd.set_option("display.max_columns", None)
 pd.set_option("display.max_rows", None)
+
+# ─── Timer ────────────────────────────────────────────────────────────────────
+
+class _Timer:
+    def __init__(self):
+        self._t0 = _time.perf_counter()
+        self._cps = []
+    def cp(self, label):
+        now = _time.perf_counter()
+        elapsed = now - self._t0
+        self._cps.append((label, elapsed))
+        self._t0 = now
+        return elapsed
+    def summary(self, records=0):
+        print("\n╔══════════════════════════════════════════════════════════╗")
+        print("║  PERFORMANCE PROFILE                                     ║")
+        print("╠══════════════════════════════════════════════════════════╣")
+        total = 0.0
+        for label, elapsed in self._cps:
+            total += elapsed
+            bar = "█" * max(1, int(elapsed * 40 / max(self._cps, key=lambda x: x[1])[1]))
+            print(f"║  {label:<40s} {elapsed:>7.3f}s {bar}")
+        print("╠══════════════════════════════════════════════════════════╣")
+        print(f"║  {'TOTAL':<40s} {total:>7.3f}s")
+        if records and total > 0:
+            print(f"║  {'THROUGHPUT':<40s} {records/total:>7.0f} rec/s")
+        print("╚══════════════════════════════════════════════════════════╝")
+
+_timer = _Timer()
 
 # ─── Load Accounts ────────────────────────────────────────────────────────────
 
@@ -45,6 +75,7 @@ accounts["_id_num"] = pd.to_numeric(accounts["Account ID"], errors="coerce")
 accounts = accounts.dropna(subset=["_id_num"]).drop(columns="_id_num").reset_index(drop=True)
 
 print(len(accounts), " - # Rows in Accounts Data")
+_timer.cp("Load accounts")
 
 # ─── Load CRM ─────────────────────────────────────────────────────────────────
 
@@ -77,6 +108,7 @@ crm_data = pd.read_excel(
 # Drop rows where Account ID is not numeric (instruction / blank rows)
 crm_data["_crm_id_num"] = pd.to_numeric(crm_data["Account ID"], errors="coerce")
 crm_data = crm_data.dropna(subset=["_crm_id_num"]).drop(columns="_crm_id_num").reset_index(drop=True)
+_timer.cp("Load CRM")
 
 # ─── Fix Data Types ───────────────────────────────────────────────────────────
 
@@ -124,6 +156,7 @@ if not dummy_accounts.empty:
     print(dummy_accounts.to_string())
 else:
     print("\n[OK] No accounts found with the word 'dummy'.")
+_timer.cp("Duplicate checks")
 
 # ─── Enrich from CRM ──────────────────────────────────────────────────────────
 
@@ -149,6 +182,8 @@ valid_website_mask = (
     (_valid_url != "None")
 )
 
+_timer.cp("Enrich from CRM")
+
 accounts.loc[valid_website_mask, "Website URL"] = (
     accounts.loc[valid_website_mask, "Website URL"]
     .astype(str)
@@ -161,6 +196,7 @@ accounts.loc[valid_website_mask, "Website URL"] = (
 
 missing_websites_count = (~valid_website_mask).sum()
 print(f"\nAccounts without valid Website URLs: {missing_websites_count}")
+_timer.cp("Clean URLs")
 
 # ─── Clean Countries ──────────────────────────────────────────────────────────
 
@@ -174,6 +210,7 @@ def resolve_country(name):
     return name.title()
 
 accounts["Country"] = accounts["Country"].astype(str).apply(resolve_country)
+_timer.cp("Clean countries")
 
 # ─── Sort & Rename ────────────────────────────────────────────────────────────
 
@@ -195,5 +232,10 @@ print(accounts["Country"].value_counts(dropna=False))
 # ─── Export ───────────────────────────────────────────────────────────────────
 
 output_file = base_name + ".csv"
+_timer.cp("Sort + rename")
 accounts.to_csv(output_file, sep=",", encoding="utf-8-sig", index=False)
 print(f"\nFile saved as {output_file}")
+_timer.cp("Export CSV")
+
+# ── Performance summary ──
+_timer.summary(records=len(accounts))
