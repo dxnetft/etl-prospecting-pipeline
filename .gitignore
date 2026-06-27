@@ -5,7 +5,9 @@
 *.pyc
 
 __pycache__/
+.vscode/
 .claude/
+.~lock.*#
 pipeline_refactor/
 docs/
 old_files/
@@ -14,5 +16,3 @@ pipeline_refactor.zip
 generate_changelog_doc.py
 1_Account Master Data Analytics_Report.xlsx
 
-# LibreOffice lock files
-.~lock.*#
